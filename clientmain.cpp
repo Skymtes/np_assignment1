@@ -51,7 +51,7 @@ int main(int argc, char *argv[])
   if (rv != 0)
   {
     fprintf(stderr, "getaddrinfo: %s\n", gai_strerror(rv));
-    printf("Invalid address/ Address not supported \n");
+    printf("ERROR: RESOLVE ISSUE\n");
     return 1;
   }
 
@@ -59,22 +59,33 @@ int main(int argc, char *argv[])
   if (internal_socket < 0)
   {
     printf("Socket could not be created.\n");
+    close(internal_socket);
     return 2;
   }
 
   int connection = connect(internal_socket, server_addr->ai_addr, server_addr->ai_addrlen);
   if (connection < 0)
   {
-    printf("Could not connect to server.\n");
+    printf("ERROR: CANT CONNECT TO %s \n", Desthost);
+    close(internal_socket);
     return 3;
   }
 
   freeaddrinfo(server_addr);
-  char first_message[] = "OK\n";
 
   while (1)
   {
     int bytes_received = recv(internal_socket, buffer, sizeof(buffer), 0);
+
+    #ifdef DEBUG
+      printf("BUFFER: %s \n", buffer);
+      printf("Getting from first time (raw): ");
+      for (size_t i = 0; i < strlen(buffer); i++) {
+        printf("[%02X]", (unsigned char) buffer[i]);
+      }
+      printf("\n");
+    #endif
+
     if (bytes_received < 0)
     {
       printf("No message received.\n");
@@ -95,6 +106,7 @@ int main(int argc, char *argv[])
     }
   }
 
+  char first_message[] = "OK\n";
   int bytes_sent = send(internal_socket, first_message, sizeof(first_message), 0);
   if (bytes_sent < 0)
   {
@@ -106,6 +118,16 @@ int main(int argc, char *argv[])
   while (1)
   {
     int bytes_received = recv(internal_socket, buffer, sizeof(buffer), 0);
+
+    #ifdef DEBUG
+      printf("BUFFER: %s \n", buffer);
+      printf("Getting from server (raw): ");
+      for (size_t i = 0; i < strlen(buffer); i++) {
+        printf("[%02X]", (unsigned char) buffer[i]);
+      }
+      printf("\n");
+    #endif
+
     if (bytes_received < 0)
     {
       printf("No message received.\n");
@@ -124,6 +146,14 @@ int main(int argc, char *argv[])
       break;
     }
   }
+
+  #ifdef DEBUG
+    printf("Getting from server (raw after cleaning): ");
+    for (size_t i = 0; i < strlen(buffer); i++) {
+      printf("[%02X]", (unsigned char) buffer[i]);
+    }
+    printf("\n");
+  #endif
 
   char delim_operation[] = " ";
   char *Operation = strtok(buffer, delim_operation);
@@ -158,14 +188,23 @@ int main(int argc, char *argv[])
       fresult = First_fnumber / Second_fnumber;
     }
 
-    printf("Assignment: %s %8.8g %8.8g\n", buffer, First_fnumber, Second_fnumber);
+    printf("ASSIGNMENT: %s %8.8g %8.8g\n", buffer, First_fnumber, Second_fnumber);
 
-    int rv = sprintf(result_string, "%.8g\n", fresult);
+    int rv = snprintf(result_string, sizeof(result_string), "%8.8g\n", fresult);
     if (rv < 0)
     {
       fprintf(stderr, "sprintf float: %s\n", gai_strerror(rv));
       return 7;
     }
+
+    #ifdef DEBUG
+      printf("Sending to server (raw): ");
+      for (size_t i = 0; i < strlen(result_string); i++) {
+        printf("[%02X]", (unsigned char) result_string[i]);
+      }
+      printf("\n");
+    #endif
+
 
     int bytes_sent = send(internal_socket, result_string, strlen(result_string), 0);
     if (bytes_sent < 0)
@@ -202,14 +241,22 @@ int main(int argc, char *argv[])
       iresult = First_inumber / Second_inumber;
     }
 
-    printf("Assignment: %s %d %d\n", buffer, First_inumber, Second_inumber);
+    printf("ASSIGNMENT: %s %d %d\n", buffer, First_inumber, Second_inumber);
 
-    int rv = sprintf(result_string, "%d\n", iresult);
+    int rv = snprintf(result_string, sizeof(result_string), "%d\n", iresult);
     if (rv < 0)
     {
       fprintf(stderr, "sprintf int: %s\n", gai_strerror(rv));
       return 9;
     }
+
+    #ifdef DEBUG
+      printf("Sending to server (raw): ");
+      for (size_t i = 0; i < strlen(result_string); i++) {
+        printf("[%02X]", (unsigned char) result_string[i]);
+      }
+      printf("\n");
+    #endif
 
     int bytes_sent = send(internal_socket, result_string, strlen(result_string), 0);
     if (bytes_sent < 0)
@@ -240,6 +287,11 @@ int main(int argc, char *argv[])
 
     if (last_bytes_received > 0)
     {
+      buffer[last_bytes_received] = '\0';
+
+      buffer[strcspn(buffer, "\r\n")] = 0;
+      result_string[strcspn(result_string, "\r\n")] = 0;
+
       printf("%s (myresult=%s)\n", buffer, result_string);
       break;
     }
