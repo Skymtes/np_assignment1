@@ -2,6 +2,7 @@
 #include <string>
 #include <string.h>
 #include <stdlib.h>
+#include <errno.h>
 /* You will have to add includes here */
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -10,8 +11,8 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 
-// Enable if you want debugging to be printed, see examble below.
-// Alternative, pass CFLAGS=-DDEBUG to make, make CFLAGS=-DDEBUG
+// Enable if you want debugging to be printed.
+// Alternative, pass CFLAGS=-DDEBUG to make
 // #define DEBUG
 
 // Included to get the support library
@@ -21,18 +22,19 @@
 
 int main(int argc, char *argv[])
 {
-  /*
-    Read first input, assumes <ip>:<port> syntax, convert into one string (Desthost) and one integer (port).
-     Atm, works only on dotted notation, i.e. IPv4 and DNS. IPv6 does not work if its using ':'.
-  */
+  if (argc < 2) {
+    fprintf(stderr, "Usage: %s <host:port>\n", argv[0]);
+    return 1;
+  }
+
   char delim_address[] = ":";
   char *Desthost = strtok(argv[1], delim_address);
   char *Destport = strtok(NULL, delim_address);
-  // *Desthost now points to a string holding whatever came before the delimiter, ':'.
-  // *Dstport points to whatever string came after the delimiter.
 
-  /* Do magic */
-  // int port = atoi(Destport);
+  if (!Desthost || !Destport) {
+    fprintf(stderr, "ERROR: bad address format, expected host:port\n");
+    return 1;
+  }
 
   printf("Host %s, and port %s.\n", Desthost, Destport);
 
@@ -58,243 +60,193 @@ int main(int argc, char *argv[])
   int internal_socket = socket(server_addr->ai_family, server_addr->ai_socktype, server_addr->ai_protocol);
   if (internal_socket < 0)
   {
-    printf("Socket could not be created.\n");
-    close(internal_socket);
+    perror("socket");
+    freeaddrinfo(server_addr);
     return 2;
   }
 
-  int connection = connect(internal_socket, server_addr->ai_addr, server_addr->ai_addrlen);
-  if (connection < 0)
+  if (connect(internal_socket, server_addr->ai_addr, server_addr->ai_addrlen) < 0)
   {
-    printf("ERROR: CANT CONNECT TO %s \n", Desthost);
+    perror("connect");
     close(internal_socket);
+    freeaddrinfo(server_addr);
     return 3;
   }
 
   freeaddrinfo(server_addr);
 
-  while (1)
+  /* --- Read initial greeting (or whatever the server first sends) --- */
+  int bytes_received = recv(internal_socket, buffer, sizeof(buffer), 0);
+  if (bytes_received < 0)
   {
-    int bytes_received = recv(internal_socket, buffer, sizeof(buffer), 0);
-
-    #ifdef DEBUG
-      printf("BUFFER: %s \n", buffer);
-      printf("Getting from first time (raw): ");
-      for (size_t i = 0; i < strlen(buffer); i++) {
-        printf("[%02X]", (unsigned char) buffer[i]);
-      }
-      printf("\n");
-    #endif
-
-    if (bytes_received < 0)
-    {
-      printf("No message received.\n");
-      close(internal_socket);
-      return 4;
-    }
-
-    if (bytes_received == 0)
-    {
-      printf("Server closed.\n");
-      close(internal_socket);
-      return 0;
-    }
-
-    if (bytes_received > 0)
-    {
-      break;
-    }
-  }
-
-  char first_message[] = "OK\n";
-  int bytes_sent = send(internal_socket, first_message, sizeof(first_message), 0);
-  if (bytes_sent < 0)
-  {
-    printf("No message sent.\n");
+    perror("recv");
     close(internal_socket);
-    return 5;
+    return 4;
   }
-
-  while (1)
+  if (bytes_received == 0)
   {
-    int bytes_received = recv(internal_socket, buffer, sizeof(buffer), 0);
-
-    #ifdef DEBUG
-      printf("BUFFER: %s \n", buffer);
-      printf("Getting from server (raw): ");
-      for (size_t i = 0; i < strlen(buffer); i++) {
-        printf("[%02X]", (unsigned char) buffer[i]);
-      }
-      printf("\n");
-    #endif
-
-    if (bytes_received < 0)
-    {
-      printf("No message received.\n");
-      close(internal_socket);
-      return 6;
-    }
-
-    else if (bytes_received == 0)
-    {
-      printf("Server closed.\n");
-      break;
-    }
-
-    else if (bytes_received > 0)
-    {
-      break;
-    }
+    printf("Server closed.\n");
+    close(internal_socket);
+    return 0;
+  }
+  /* null-terminate safely */
+  {
+    int used = (bytes_received < (int)sizeof(buffer)) ? bytes_received : (int)sizeof(buffer)-1;
+    buffer[used] = '\0';
   }
 
   #ifdef DEBUG
-    printf("Getting from server (raw after cleaning): ");
-    for (size_t i = 0; i < strlen(buffer); i++) {
+    printf("BUFFER (first recv, len=%d): ", bytes_received);
+    for (int i = 0; i < bytes_received; i++) {
       printf("[%02X]", (unsigned char) buffer[i]);
     }
     printf("\n");
   #endif
+
+  /* send a short acknowledgment if your protocol expects it (use strlen, not sizeof) */
+  char first_message[] = "OK\n";
+  int bytes_sent = send(internal_socket, first_message, strlen(first_message), 0);
+  if (bytes_sent < 0)
+  {
+    perror("send OK");
+    close(internal_socket);
+    return 5;
+  }
+
+  /* --- Wait for the actual assignment from server (second recv) --- */
+  memset(buffer, 0, sizeof(buffer));
+  bytes_received = recv(internal_socket, buffer, sizeof(buffer), 0);
+  if (bytes_received < 0)
+  {
+    perror("recv");
+    close(internal_socket);
+    return 6;
+  }
+  if (bytes_received == 0)
+  {
+    printf("Server closed.\n");
+    close(internal_socket);
+    return 0;
+  }
+  {
+    int used = (bytes_received < (int)sizeof(buffer)) ? bytes_received : (int)sizeof(buffer)-1;
+    buffer[used] = '\0';
+  }
+
+  #ifdef DEBUG
+    printf("BUFFER (assignment, len=%d): ", bytes_received);
+    for (int i = 0; i < bytes_received; i++) {
+      printf("[%02X]", (unsigned char) buffer[i]);
+    }
+    printf("\n");
+  #endif
+
+  /* strip CR/LF */
+  buffer[strcspn(buffer, "\r\n")] = 0;
+
+  /* detect valid operation prefix before parsing */
+  if (strncmp(buffer, "add", 3) != 0 &&
+      strncmp(buffer, "sub", 3) != 0 &&
+      strncmp(buffer, "mul", 3) != 0 &&
+      strncmp(buffer, "div", 3) != 0 &&
+      strncmp(buffer, "fadd", 4) != 0 &&
+      strncmp(buffer, "fsub", 4) != 0 &&
+      strncmp(buffer, "fmul", 4) != 0 &&
+      strncmp(buffer, "fdiv", 4) != 0) {
+    printf("ERROR\n");
+    close(internal_socket);
+    return 1;
+  }
 
   char delim_operation[] = " ";
   char *Operation = strtok(buffer, delim_operation);
   char *First_number = strtok(NULL, delim_operation);
   char *Second_number = strtok(NULL, delim_operation);
 
+  if (!Operation || !First_number || !Second_number) {
+    printf("ERROR\n");
+    close(internal_socket);
+    return 1;
+  }
+
   char result_string[64];
+  memset(result_string, 0, sizeof(result_string));
 
   if (Operation[0] == 'f')
   {
     double First_fnumber = strtod(First_number, NULL);
     double Second_fnumber = strtod(Second_number, NULL);
-    double fresult;
+    double fresult = 0.0;
 
-    if (strcmp(Operation, "fadd") == 0)
-    {
-      fresult = First_fnumber + Second_fnumber;
-    }
+    if (strcmp(Operation, "fadd") == 0) fresult = First_fnumber + Second_fnumber;
+    else if (strcmp(Operation, "fsub") == 0) fresult = First_fnumber - Second_fnumber;
+    else if (strcmp(Operation, "fmul") == 0) fresult = First_fnumber * Second_fnumber;
+    else if (strcmp(Operation, "fdiv") == 0) fresult = First_fnumber / Second_fnumber;
 
-    else if (strcmp(Operation, "fsub") == 0)
-    {
-      fresult = First_fnumber - Second_fnumber;
-    }
+    printf("ASSIGNMENT: %s %8.8g %8.8g\n", Operation, First_fnumber, Second_fnumber);
 
-    else if (strcmp(Operation, "fmul") == 0)
-    {
-      fresult = First_fnumber * Second_fnumber;
-    }
-
-    else if (strcmp(Operation, "fdiv") == 0)
-    {
-      fresult = First_fnumber / Second_fnumber;
-    }
-
-    printf("ASSIGNMENT: %s %8.8g %8.8g\n", buffer, First_fnumber, Second_fnumber);
-
-    int rv = snprintf(result_string, sizeof(result_string), "%8.8g\n", fresult);
-    if (rv < 0)
-    {
-      fprintf(stderr, "sprintf float: %s\n", gai_strerror(rv));
+    int r = snprintf(result_string, sizeof(result_string), "%8.8g\n", fresult);
+    if (r < 0) {
+      perror("snprintf");
+      close(internal_socket);
       return 7;
     }
 
-    #ifdef DEBUG
-      printf("Sending to server (raw): ");
-      for (size_t i = 0; i < strlen(result_string); i++) {
-        printf("[%02X]", (unsigned char) result_string[i]);
-      }
-      printf("\n");
-    #endif
-
-
-    int bytes_sent = send(internal_socket, result_string, strlen(result_string), 0);
+    bytes_sent = send(internal_socket, result_string, strlen(result_string), 0);
     if (bytes_sent < 0)
     {
-      printf("No message sent.\n");
+      perror("send");
       close(internal_socket);
       return 8;
     }
   }
-
   else
   {
     int First_inumber = atoi(First_number);
     int Second_inumber = atoi(Second_number);
-    int iresult;
+    int iresult = 0;
 
-    if (strcmp(Operation, "add") == 0)
-    {
-      iresult = First_inumber + Second_inumber;
-    }
+    if (strcmp(Operation, "add") == 0) iresult = First_inumber + Second_inumber;
+    else if (strcmp(Operation, "sub") == 0) iresult = First_inumber - Second_inumber;
+    else if (strcmp(Operation, "mul") == 0) iresult = First_inumber * Second_inumber;
+    else if (strcmp(Operation, "div") == 0) iresult = First_inumber / Second_inumber;
 
-    else if (strcmp(Operation, "sub") == 0)
-    {
-      iresult = First_inumber - Second_inumber;
-    }
+    printf("ASSIGNMENT: %s %d %d\n", Operation, First_inumber, Second_inumber);
 
-    else if (strcmp(Operation, "mul") == 0)
-    {
-      iresult = First_inumber * Second_inumber;
-    }
-
-    else if (strcmp(Operation, "div") == 0)
-    {
-      iresult = First_inumber / Second_inumber;
-    }
-
-    printf("ASSIGNMENT: %s %d %d\n", buffer, First_inumber, Second_inumber);
-
-    int rv = snprintf(result_string, sizeof(result_string), "%d\n", iresult);
-    if (rv < 0)
-    {
-      fprintf(stderr, "sprintf int: %s\n", gai_strerror(rv));
+    int r = snprintf(result_string, sizeof(result_string), "%d\n", iresult);
+    if (r < 0) {
+      perror("snprintf");
+      close(internal_socket);
       return 9;
     }
 
-    #ifdef DEBUG
-      printf("Sending to server (raw): ");
-      for (size_t i = 0; i < strlen(result_string); i++) {
-        printf("[%02X]", (unsigned char) result_string[i]);
-      }
-      printf("\n");
-    #endif
-
-    int bytes_sent = send(internal_socket, result_string, strlen(result_string), 0);
+    bytes_sent = send(internal_socket, result_string, strlen(result_string), 0);
     if (bytes_sent < 0)
     {
-      printf("No message sent.\n");
+      perror("send");
       close(internal_socket);
       return 10;
     }
   }
 
+  /* --- final response from server (OK or ERROR) --- */
   memset(buffer, 0, sizeof(buffer));
-
-  while (1)
+  int last_bytes_received = recv(internal_socket, buffer, sizeof(buffer), 0);
+  if (last_bytes_received < 0)
   {
-    int last_bytes_received = recv(internal_socket, buffer, sizeof(buffer), 0);
-    if (last_bytes_received < 0)
-    {
-      printf("No message received.\n");
-      close(internal_socket);
-      return 11;
-    }
-
-    if (last_bytes_received == 0)
-    {
-      printf("Server closed.\n");
-      break;
-    }
-
-    if (last_bytes_received > 0)
-    {
-      buffer[last_bytes_received] = '\0';
-
-      buffer[strcspn(buffer, "\r\n")] = 0;
-      result_string[strcspn(result_string, "\r\n")] = 0;
-
-      printf("%s (myresult=%s)\n", buffer, result_string);
-      break;
-    }
+    perror("recv");
+    close(internal_socket);
+    return 11;
+  }
+  if (last_bytes_received == 0)
+  {
+    printf("Server closed.\n");
+  } else {
+    int used = (last_bytes_received < (int)sizeof(buffer)) ? last_bytes_received : (int)sizeof(buffer)-1;
+    buffer[used] = '\0';
+    buffer[strcspn(buffer, "\r\n")] = 0;
+    result_string[strcspn(result_string, "\r\n")] = 0;
+    printf("%s (myresult=%s)\n", buffer, result_string);
   }
 
   close(internal_socket);
