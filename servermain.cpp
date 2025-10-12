@@ -11,16 +11,18 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 
+// Enable if you want debugging to be printed.
+// Alternative, pass CFLAGS=-DDEBUG to make
+// #define DEBUG
+
+// Included to get the support library
 #include <calcLib.h>
 
 using namespace std;
 
-/* Read a line terminated by '\n' with a total timeout of timeout_seconds.
-   Returns:
-    >0 : bytes read (including '\n')
-     0 : timeout
-    -1 : error / connection closed
-*/
+/* Read a line terminated by '\n' with a total timeout (seconds).
+   returns >0 bytes read (including '\n'), 0 timeout, -1 error/closed.
+   The returned std::string includes the terminating '\n' if present. */
 static ssize_t recv_line_with_timeout(int fd, string &out, int timeout_seconds) {
     out.clear();
     fd_set rset;
@@ -59,14 +61,6 @@ static ssize_t recv_line_with_timeout(int fd, string &out, int timeout_seconds) 
     return (ssize_t)out.size();
 }
 
-/* trim */
-static inline string trim(const string &s) {
-    size_t a = s.find_first_not_of(" \t\r\n");
-    if (a == string::npos) return "";
-    size_t b = s.find_last_not_of(" \t\r\n");
-    return s.substr(a, b - a + 1);
-}
-
 int main(int argc, char *argv[]) {
     if (argc < 2) {
         fprintf(stderr, "Usage: %s host:port\n", argv[0]);
@@ -78,14 +72,12 @@ int main(int argc, char *argv[]) {
     char delim_address[] = ":";
     char *Desthost = strtok(argv[1], delim_address);
     char *Destport = strtok(NULL, delim_address);
-
     if (!Desthost || !Destport) {
         fprintf(stderr, "ERROR: bad address format, expected host:port\n");
         return 1;
     }
 
     struct addrinfo hints, *res, *rp;
-
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
@@ -102,31 +94,27 @@ int main(int argc, char *argv[]) {
         if (listen_fd < 0) continue;
         int yes = 1;
         setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-        if (bind(listen_fd, rp->ai_addr, rp->ai_addrlen) == 0) {
-            break; /* bound */
-        }
+        if (bind(listen_fd, rp->ai_addr, rp->ai_addrlen) == 0) break;
         close(listen_fd);
         listen_fd = -1;
     }
+    freeaddrinfo(res);
 
     if (listen_fd < 0) {
         fprintf(stderr, "Could not bind to %s:%s\n", Desthost, Destport);
-        freeaddrinfo(res);
         return 1;
     }
 
-    freeaddrinfo(res);
-
-    /* backlog 5: five clients may queue, sixth will be rejected by OS */
     if (listen(listen_fd, 5) < 0) {
         perror("listen");
         close(listen_fd);
         return 1;
     }
 
+  #ifdef DEBUG
     printf("Server listening on %s:%s (backlog=5)\n", argv[1], Destport);
+  #endif
 
-    /* main accept loop - one client at a time */
     while (1) {
         struct sockaddr_storage cliaddr;
         socklen_t clilen = sizeof(cliaddr);
@@ -137,16 +125,19 @@ int main(int argc, char *argv[]) {
             break;
         }
 
-        /* log client */
         char hostbuf[NI_MAXHOST], portbuf[NI_MAXSERV];
         if (getnameinfo((struct sockaddr*)&cliaddr, clilen, hostbuf, sizeof(hostbuf),
                         portbuf, sizeof(portbuf), NI_NUMERICHOST | NI_NUMERICSERV) == 0) {
+  #ifdef DEBUG
             printf("Accepted connection from %s:%s\n", hostbuf, portbuf);
+  #endif
         } else {
+  #ifdef DEBUG
             printf("Accepted connection (address unknown)\n");
+  #endif
         }
 
-        /* send protocol advertisement "TEXT TCP 1.0\n" + extra '\n' */
+        /* send protocol advertisement */
         const char *protoAd = "TEXT TCP 1.0\n\n";
         if (send(client_fd, protoAd, strlen(protoAd), 0) < 0) {
             perror("send");
@@ -154,32 +145,30 @@ int main(int argc, char *argv[]) {
             continue;
         }
 
-        /* wait for client's acceptance ("OK\n") with 5s timeout */
+        /* wait for client "OK\n" (5s) */
         string line;
-        ssize_t rv = recv_line_with_timeout(client_fd, line, 5);
-        if (rv <= 0) {
+        ssize_t got = recv_line_with_timeout(client_fd, line, 5);
+        if (got <= 0) {
             const char *to = "ERROR TO\n";
             send(client_fd, to, strlen(to), 0);
             close(client_fd);
             printf("Client did not accept protocol in time -> closed\n");
             continue;
         }
-        string clientResp = trim(line);
-        if (clientResp != "OK") {
-            printf("Client did not accept protocol (got '%s'), closing\n", clientResp.c_str());
+        /* no trim: client should send exactly "OK\n" as in your client */
+        if (!(line.size() >= 2 && line[0] == 'O' && line[1] == 'K')) {
+            printf("Client did not accept protocol (got '%s'), closing\n", line.c_str());
             close(client_fd);
             continue;
         }
 
-        /* generate assignment using calcLib */
-        char *op = randomType();
-        int iv1=0, iv2=1;
-        double fv1=0.0, fv2=1.0;
-
+        /* generate assignment */
+        char *op = randomType(); // e.g. "add" or "fadd"
+        int iv1 = 0, iv2 = 1;
+        double fv1 = 0.0, fv2 = 1.0;
         if (op[0] == 'f') {
             fv1 = randomFloat();
             fv2 = randomFloat();
-            /* avoid exact zero for division */
             if (strcmp(op, "fdiv") == 0 && fv2 == 0.0) fv2 = 1.0;
         } else {
             iv1 = randomInt();
@@ -188,97 +177,81 @@ int main(int argc, char *argv[]) {
         }
 
         char msg[256];
-        memset(msg, 0, sizeof(msg));
         if (op[0] == 'f') {
             snprintf(msg, sizeof(msg), "%s %8.8g %8.8g\n", op, fv1, fv2);
         } else {
             snprintf(msg, sizeof(msg), "%s %d %d\n", op, iv1, iv2);
         }
 
-        /* send assignment */
         if (send(client_fd, msg, strlen(msg), 0) < 0) {
             perror("send assignment");
             close(client_fd);
             continue;
         }
+#ifdef DEBUG
         printf("ASSIGNMENT SENT: %s", msg);
-
-        /* wait for client's solution with 5s timeout */
-        string replyLine;
-        ssize_t got = recv_line_with_timeout(client_fd, replyLine, 5);
-        if (got == 0) {
-            /* timeout */
+#endif
+        /* wait for client's solution (5s) */
+        string reply;
+        ssize_t r = recv_line_with_timeout(client_fd, reply, 5);
+        if (r == 0) {
             const char *to = "ERROR TO\n";
             send(client_fd, to, strlen(to), 0);
             close(client_fd);
             printf("Client timed out solving assignment -> sent ERROR TO and closed\n");
             continue;
-        } else if (got < 0) {
+        } else if (r < 0) {
             close(client_fd);
             printf("Error while reading client reply\n");
             continue;
         }
 
-        string replyTrim = trim(replyLine);
-        printf("Client reply: '%s'\n", replyTrim.c_str());
-
+#ifdef DEBUG
+        printf("Client reply: '%s'\n", reply.c_str());
+#endif
         bool correct = false;
+        const char *cstr = reply.c_str();
 
-        /* Compare results */
         if (op[0] == 'f') {
-            /* floating point expected - parse double */
-            char *endptr = NULL;
-            const char *cstr = replyTrim.c_str();
-            double clientValue = strtod(cstr, &endptr);
-            if (endptr == cstr) {
-                correct = false;
-            } else {
-                double ref = 0.0;
-                if (strcmp(op, "fadd") == 0) ref = fv1 + fv2;
-                else if (strcmp(op, "fsub") == 0) ref = fv1 - fv2;
-                else if (strcmp(op, "fmul") == 0) ref = fv1 * fv2;
-                else if (strcmp(op, "fdiv") == 0) ref = fv1 / fv2;
-
-                float precision = 0.0001;
-                if (((ref - precision) < clientValue) && 
-                    ((ref + precision) > clientValue))
-                    correct = true;
-                else
-                  correct = false;
-                  
-                printf("REF = %8.8g, CLIENT = %8.8g", ref, clientValue);
-            }
+            double clientValue = strtod(cstr, NULL); // stray newline is fine
+            double ref = 0.0;
+            if (strcmp(op, "fadd") == 0) ref = fv1 + fv2;
+            else if (strcmp(op, "fsub") == 0) ref = fv1 - fv2;
+            else if (strcmp(op, "fmul") == 0) ref = fv1 * fv2;
+            else if (strcmp(op, "fdiv") == 0) ref = fv1 / fv2;
+            float precision = 0.0001;
+            if (((ref - precision) < clientValue) && 
+                ((ref + precision) > clientValue))
+                correct = true;
+            else
+              correct = false;
+  #ifdef DEBUG
+            printf("REF = %8.8g, CLIENT = %8.8g\n", ref, clientValue);
+            #endif
         } else {
-            /* integer expected */
-            char *endptr = NULL;
-            const char *cstr = replyTrim.c_str();
-            long val = strtol(cstr, &endptr, 10);
-            if (endptr == cstr) {
-                correct = false;
-            } else {
-                long ref = 0;
-                if (strcmp(op, "add") == 0) ref = (long)iv1 + (long)iv2;
-                else if (strcmp(op, "sub") == 0) ref = (long)iv1 - (long)iv2;
-                else if (strcmp(op, "mul") == 0) ref = (long)iv1 * (long)iv2;
-                else if (strcmp(op, "div") == 0) ref = (long)(iv1 / iv2); 
-                if (val == ref) correct = true;
-                else correct = false;
-                printf("REF = %ld, CLIENT = %ld\n", ref, val);
-            }
+            long val = strtol(cstr, NULL, 10);
+            long ref = 0;
+            if (strcmp(op, "add") == 0) ref = (long)iv1 + (long)iv2;
+            else if (strcmp(op, "sub") == 0) ref = (long)iv1 - (long)iv2;
+            else if (strcmp(op, "mul") == 0) ref = (long)iv1 * (long)iv2;
+            else if (strcmp(op, "div") == 0) ref = (long)(iv1 / iv2); // integer division
+            if (val == ref) correct = true;
+  #ifdef DEBUG
+            printf("REF = %ld, CLIENT = %ld\n", ref, val);
+            #endif
         }
 
-        const char *okmsg = "OK\n";
-        const char *errormsg = "ERROR\n";
         if (correct) {
-            send(client_fd, okmsg, strlen(okmsg), 0);
+            send(client_fd, "OK\n", 3, 0);
+  #ifdef DEBUG
             printf("Sent OK to client\n");
+            #endif
         } else {
-            send(client_fd, errormsg, strlen(errormsg), 0);
+            send(client_fd, "ERROR\n", 6, 0);
             printf("Sent ERROR to client\n");
         }
 
         close(client_fd);
-        /* loop back to accept next client */
     }
 
     close(listen_fd);
