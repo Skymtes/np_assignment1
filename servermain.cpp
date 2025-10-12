@@ -42,20 +42,14 @@ static ssize_t recv_line_with_timeout(int fd, string &out, int timeout_seconds) 
         tv.tv_sec = remain;
         tv.tv_usec = 0;
         int rv = select(fd + 1, &rset, NULL, NULL, &tv);
-        if (rv < 0) {
-            if (errno == EINTR) continue;
-            return -1;
-        } else if (rv == 0) {
-            return 0; // timeout
-        } else {
+        if (rv > 0) {
             n = recv(fd, &c, 1, 0);
-            if (n == 0) return -1; // closed
             if (n < 0) {
-                if (errno == EINTR) continue;
                 return -1;
             }
             out.push_back(c);
-            if (c == '\n') break;
+            if (c == '\n') 
+              break;
         }
     }
     return (ssize_t)out.size();
@@ -90,20 +84,25 @@ int main(int argc, char *argv[]) {
 
     int listen_fd = -1;
     for (rp = res; rp != NULL; rp = rp->ai_next) {
-        listen_fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-        if (listen_fd < 0) continue;
+        if ((listen_fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol)) < 0)
+        {    
+          perror("server: socket");
+          continue;
+        }
         int yes = 1;
-        setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-        if (bind(listen_fd, rp->ai_addr, rp->ai_addrlen) == 0) break;
-        close(listen_fd);
-        listen_fd = -1;
+        if ((setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes))) < 0)
+        {
+            perror("setsockopt");
+            exit(1);
+        }
+        if (bind(listen_fd, rp->ai_addr, rp->ai_addrlen) < 0) 
+        {
+            close(listen_fd);
+            perror("server: bind");
+            continue;
+        }
     }
     freeaddrinfo(res);
-
-    if (listen_fd < 0) {
-        fprintf(stderr, "Could not bind to %s:%s\n", Desthost, Destport);
-        return 1;
-    }
 
     if (listen(listen_fd, 5) < 0) {
         perror("listen");
@@ -119,8 +118,8 @@ int main(int argc, char *argv[]) {
         struct sockaddr_storage cliaddr;
         socklen_t clilen = sizeof(cliaddr);
         int client_fd = accept(listen_fd, (struct sockaddr*)&cliaddr, &clilen);
-        if (client_fd < 0) {
-            if (errno == EINTR) continue;
+        if (client_fd < 0) 
+        {
             perror("accept");
             break;
         }
@@ -137,9 +136,9 @@ int main(int argc, char *argv[]) {
   #endif
         }
 
-        /* send protocol advertisement */
-        const char *protoAd = "TEXT TCP 1.0\n\n";
-        if (send(client_fd, protoAd, strlen(protoAd), 0) < 0) {
+        /* send protocol */
+        const char *proto = "TEXT TCP 1.0\n\n";
+        if (send(client_fd, proto, strlen(proto), 0) < 0) {
             perror("send");
             close(client_fd);
             continue;
@@ -155,7 +154,6 @@ int main(int argc, char *argv[]) {
             printf("Client did not accept protocol in time -> closed\n");
             continue;
         }
-        /* no trim: client should send exactly "OK\n" as in your client */
         if (!(line.size() >= 2 && line[0] == 'O' && line[1] == 'K')) {
             printf("Client did not accept protocol (got '%s'), closing\n", line.c_str());
             close(client_fd);
@@ -163,7 +161,7 @@ int main(int argc, char *argv[]) {
         }
 
         /* generate assignment */
-        char *op = randomType(); // e.g. "add" or "fadd"
+        char *op = randomType();
         int iv1 = 0, iv2 = 1;
         double fv1 = 0.0, fv2 = 1.0;
         if (op[0] == 'f') {
@@ -188,9 +186,11 @@ int main(int argc, char *argv[]) {
             close(client_fd);
             continue;
         }
+
 #ifdef DEBUG
         printf("ASSIGNMENT SENT: %s", msg);
 #endif
+
         /* wait for client's solution (5s) */
         string reply;
         ssize_t r = recv_line_with_timeout(client_fd, reply, 5);
@@ -209,6 +209,7 @@ int main(int argc, char *argv[]) {
 #ifdef DEBUG
         printf("Client reply: '%s'\n", reply.c_str());
 #endif
+
         bool correct = false;
         const char *cstr = reply.c_str();
 
@@ -225,9 +226,11 @@ int main(int argc, char *argv[]) {
                 correct = true;
             else
               correct = false;
-  #ifdef DEBUG
+
+#ifdef DEBUG
             printf("REF = %8.8g, CLIENT = %8.8g\n", ref, clientValue);
-            #endif
+#endif
+
         } else {
             long val = strtol(cstr, NULL, 10);
             long ref = 0;
@@ -236,16 +239,20 @@ int main(int argc, char *argv[]) {
             else if (strcmp(op, "mul") == 0) ref = (long)iv1 * (long)iv2;
             else if (strcmp(op, "div") == 0) ref = (long)(iv1 / iv2); // integer division
             if (val == ref) correct = true;
-  #ifdef DEBUG
+
+#ifdef DEBUG
             printf("REF = %ld, CLIENT = %ld\n", ref, val);
-            #endif
+#endif
+
         }
 
         if (correct) {
             send(client_fd, "OK\n", 3, 0);
-  #ifdef DEBUG
+
+#ifdef DEBUG
             printf("Sent OK to client\n");
-            #endif
+#endif
+
         } else {
             send(client_fd, "ERROR\n", 6, 0);
             printf("Sent ERROR to client\n");
