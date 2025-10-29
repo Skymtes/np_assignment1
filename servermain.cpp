@@ -102,6 +102,7 @@ int main(int argc, char *argv[]) {
             continue;
         }
     }
+    
     freeaddrinfo(res);
 
     if (listen(listen_fd, 5) < 0) {
