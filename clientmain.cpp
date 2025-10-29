@@ -22,7 +22,8 @@
 
 int main(int argc, char *argv[])
 {
-  if (argc < 2) {
+  if (argc < 2)
+  {
     fprintf(stderr, "Usage: %s <host:port>\n", argv[0]);
     return 1;
   }
@@ -31,7 +32,8 @@ int main(int argc, char *argv[])
   char *Desthost = strtok(argv[1], delim_address);
   char *Destport = strtok(NULL, delim_address);
 
-  if (!Desthost || !Destport) {
+  if (!Desthost || !Destport)
+  {
     fprintf(stderr, "ERROR: bad address format, expected host:port\n");
     return 1;
   }
@@ -91,17 +93,18 @@ int main(int argc, char *argv[])
   }
   /* null-terminate safely */
   {
-    int used = (bytes_received < (int)sizeof(buffer)) ? bytes_received : (int)sizeof(buffer)-1;
+    int used = (bytes_received < (int)sizeof(buffer)) ? bytes_received : (int)sizeof(buffer) - 1;
     buffer[used] = '\0';
   }
 
-  #ifdef DEBUG
-    printf("BUFFER (first recv, len=%d): ", bytes_received);
-    for (int i = 0; i < bytes_received; i++) {
-      printf("[%02X]", (unsigned char) buffer[i]);
-    }
-    printf("\n");
-  #endif
+#ifdef DEBUG
+  printf("BUFFER (first recv, len=%d): ", bytes_received);
+  for (int i = 0; i < bytes_received; i++)
+  {
+    printf("[%02X]", (unsigned char)buffer[i]);
+  }
+  printf("\n");
+#endif
 
   /* send a short acknowledgment if your protocol expects it (use strlen, not sizeof) */
   char first_message[] = "OK\n";
@@ -129,17 +132,18 @@ int main(int argc, char *argv[])
     return 0;
   }
   {
-    int used = (bytes_received < (int)sizeof(buffer)) ? bytes_received : (int)sizeof(buffer)-1;
+    int used = (bytes_received < (int)sizeof(buffer)) ? bytes_received : (int)sizeof(buffer) - 1;
     buffer[used] = '\0';
   }
 
-  #ifdef DEBUG
-    printf("BUFFER (assignment, len=%d): ", bytes_received);
-    for (int i = 0; i < bytes_received; i++) {
-      printf("[%02X]", (unsigned char) buffer[i]);
-    }
-    printf("\n");
-  #endif
+#ifdef DEBUG
+  printf("BUFFER (assignment, len=%d): ", bytes_received);
+  for (int i = 0; i < bytes_received; i++)
+  {
+    printf("[%02X]", (unsigned char)buffer[i]);
+  }
+  printf("\n");
+#endif
 
   /* strip CR/LF */
   buffer[strcspn(buffer, "\r\n")] = 0;
@@ -152,7 +156,8 @@ int main(int argc, char *argv[])
       strncmp(buffer, "fadd", 4) != 0 &&
       strncmp(buffer, "fsub", 4) != 0 &&
       strncmp(buffer, "fmul", 4) != 0 &&
-      strncmp(buffer, "fdiv", 4) != 0) {
+      strncmp(buffer, "fdiv", 4) != 0)
+  {
     printf("ERROR\n");
     close(internal_socket);
     return 1;
@@ -163,7 +168,8 @@ int main(int argc, char *argv[])
   char *First_number = strtok(NULL, delim_operation);
   char *Second_number = strtok(NULL, delim_operation);
 
-  if (!Operation || !First_number || !Second_number) {
+  if (!Operation || !First_number || !Second_number)
+  {
     printf("ERROR\n");
     close(internal_socket);
     return 1;
@@ -178,15 +184,20 @@ int main(int argc, char *argv[])
     double Second_fnumber = strtod(Second_number, NULL);
     double fresult = 0.0;
 
-    if (strcmp(Operation, "fadd") == 0) fresult = First_fnumber + Second_fnumber;
-    else if (strcmp(Operation, "fsub") == 0) fresult = First_fnumber - Second_fnumber;
-    else if (strcmp(Operation, "fmul") == 0) fresult = First_fnumber * Second_fnumber;
-    else if (strcmp(Operation, "fdiv") == 0) fresult = First_fnumber / Second_fnumber;
+    if (strcmp(Operation, "fadd") == 0)
+      fresult = First_fnumber + Second_fnumber;
+    else if (strcmp(Operation, "fsub") == 0)
+      fresult = First_fnumber - Second_fnumber;
+    else if (strcmp(Operation, "fmul") == 0)
+      fresult = First_fnumber * Second_fnumber;
+    else if (strcmp(Operation, "fdiv") == 0)
+      fresult = First_fnumber / Second_fnumber;
 
     printf("ASSIGNMENT: %s %8.8g %8.8g\n", Operation, First_fnumber, Second_fnumber);
 
     int r = snprintf(result_string, sizeof(result_string), "%8.8g\n", fresult);
-    if (r < 0) {
+    if (r < 0)
+    {
       perror("snprintf");
       close(internal_socket);
       return 7;
@@ -206,15 +217,20 @@ int main(int argc, char *argv[])
     int Second_inumber = atoi(Second_number);
     int iresult = 0;
 
-    if (strcmp(Operation, "add") == 0) iresult = First_inumber + Second_inumber;
-    else if (strcmp(Operation, "sub") == 0) iresult = First_inumber - Second_inumber;
-    else if (strcmp(Operation, "mul") == 0) iresult = First_inumber * Second_inumber;
-    else if (strcmp(Operation, "div") == 0) iresult = First_inumber / Second_inumber;
+    if (strcmp(Operation, "add") == 0)
+      iresult = First_inumber + Second_inumber;
+    else if (strcmp(Operation, "sub") == 0)
+      iresult = First_inumber - Second_inumber;
+    else if (strcmp(Operation, "mul") == 0)
+      iresult = First_inumber * Second_inumber;
+    else if (strcmp(Operation, "div") == 0)
+      iresult = First_inumber / Second_inumber;
 
     printf("ASSIGNMENT: %s %d %d\n", Operation, First_inumber, Second_inumber);
 
     int r = snprintf(result_string, sizeof(result_string), "%d\n", iresult);
-    if (r < 0) {
+    if (r < 0)
+    {
       perror("snprintf");
       close(internal_socket);
       return 9;
@@ -241,8 +257,10 @@ int main(int argc, char *argv[])
   if (last_bytes_received == 0)
   {
     printf("Server closed.\n");
-  } else {
-    int used = (last_bytes_received < (int)sizeof(buffer)) ? last_bytes_received : (int)sizeof(buffer)-1;
+  }
+  else
+  {
+    int used = (last_bytes_received < (int)sizeof(buffer)) ? last_bytes_received : (int)sizeof(buffer) - 1;
     buffer[used] = '\0';
     buffer[strcspn(buffer, "\r\n")] = 0;
     result_string[strcspn(result_string, "\r\n")] = 0;
